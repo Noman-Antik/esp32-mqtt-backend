@@ -25,14 +25,23 @@ MQTT_TOPIC = os.getenv(
 
 
 # =========================
-# SUPABASE DATABASE
+# DATABASE
 # =========================
 
 DATABASE_URL = os.getenv("DATABASE_URL")
 
 
 # =========================
-# FLASK HOME ROUTE
+# MOVEMENT DETECTION
+# =========================
+
+MOVEMENT_THRESHOLD_CM = 30.0
+
+previous_distance = None
+
+
+# =========================
+# FLASK
 # =========================
 
 @app.route("/")
@@ -41,17 +50,22 @@ def home():
 
 
 # =========================
-# SAVE DATA TO SUPABASE
+# SAVE DATA TO DATABASE
 # =========================
 
 def save_to_database(data):
+
+    global previous_distance
 
     conn = None
     cur = None
 
     try:
 
-        # Convert MQTT data
+        # -------------------------
+        # NO ECHO
+        # -------------------------
+
         if data == "NO_ECHO":
 
             distance = None
@@ -60,27 +74,69 @@ def save_to_database(data):
         else:
 
             distance = float(data)
-            status = "NORMAL"
+
+            # -------------------------
+            # MOVEMENT DETECTION
+            # -------------------------
+
+            if previous_distance is None:
+
+                status = "NORMAL"
+
+            else:
+
+                difference = abs(
+                    distance - previous_distance
+                )
+
+                if difference >= MOVEMENT_THRESHOLD_CM:
+
+                    status = "MOVEMENT"
+
+                    print(
+                        f"MOVEMENT DETECTED | "
+                        f"Previous={previous_distance:.2f} cm | "
+                        f"Current={distance:.2f} cm | "
+                        f"Difference={difference:.2f} cm"
+                    )
+
+                else:
+
+                    status = "NORMAL"
 
 
-        # Connect to PostgreSQL
-        conn = psycopg2.connect(DATABASE_URL)
+            # Update previous valid distance
+            previous_distance = distance
+
+
+        # -------------------------
+        # CONNECT DATABASE
+        # -------------------------
+
+        conn = psycopg2.connect(
+            DATABASE_URL
+        )
 
         cur = conn.cursor()
 
 
-        # Insert sensor data
+        # -------------------------
+        # INSERT DATA
+        # -------------------------
+
         cur.execute(
             """
             INSERT INTO public.sensor_data
             (distance, status)
             VALUES (%s, %s)
             """,
-            (distance, status)
+            (
+                distance,
+                status
+            )
         )
 
 
-        # Save changes
         conn.commit()
 
 
@@ -139,7 +195,7 @@ def on_connect(
 
 
 # =========================
-# MQTT MESSAGE RECEIVED
+# MQTT MESSAGE
 # =========================
 
 def on_message(
@@ -161,7 +217,6 @@ def on_message(
     )
 
 
-    # Save MQTT data to Supabase
     save_to_database(data)
 
 
@@ -178,23 +233,19 @@ def mqtt_worker():
     )
 
 
-    # MQTT authentication
     client.username_pw_set(
         MQTT_USERNAME,
         MQTT_PASSWORD
     )
 
 
-    # Enable TLS
     client.tls_set()
 
 
-    # MQTT callbacks
     client.on_connect = on_connect
     client.on_message = on_message
 
 
-    # Keep reconnecting if connection fails
     while True:
 
         try:
@@ -242,7 +293,7 @@ mqtt_thread.start()
 
 
 # =========================
-# START FLASK SERVER
+# START FLASK
 # =========================
 
 if __name__ == "__main__":
